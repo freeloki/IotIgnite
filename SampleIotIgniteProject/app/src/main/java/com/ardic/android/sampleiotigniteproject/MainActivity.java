@@ -16,6 +16,9 @@ import android.os.Handler;
 
 import com.ardic.android.connectivity.libwirelessconnection.WifiHelper;
 import com.ardic.android.connectivity.libwirelessconnection.listeners.SimpleWifiConnectionListener;
+import com.ardic.android.libnsd.nsdhelper.CommonNSDServiceTypes;
+import com.ardic.android.libnsd.nsdhelper.NetworkServiceDiscovery;
+import com.ardic.android.libnsd.nsdhelper.ServiceDiscoveryResolverListener;
 
 import java.io.IOException;
 import java.sql.Time;
@@ -26,11 +29,12 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 
-public class MainActivity extends AppCompatActivity implements NsdManager.DiscoveryListener{
+public class MainActivity extends AppCompatActivity implements ServiceDiscoveryResolverListener {
 
     private static final String TAG ="TestApp";
     // Ignite Variables //
     private NsdManager mNsdManager;
+    private NetworkServiceDiscovery mNsd;
     private static final String SERVICE_TYPE="_esp8266._tcp.";
     private static List<String> espServiceList = new ArrayList<String>();
     private static List<ESP8266NodeHandler> espInstances = new ArrayList<ESP8266NodeHandler>();
@@ -39,16 +43,18 @@ public class MainActivity extends AppCompatActivity implements NsdManager.Discov
 
     private WifiHelper mWifiHelper;
 
-
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         Log.i(TAG,"Application started...");
-        mNsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
-        mNsdManager.discoverServices(
-                SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, this);
+       // mNsdManager = (NsdManager) getSystemService(Context.NSD_SERVICE);
+       // mNsdManager.discoverServices(
+       //         SERVICE_TYPE, NsdManager.PROTOCOL_DNS_SD, this);
+        mNsd = new NetworkServiceDiscovery(getApplicationContext());
+        mNsd.initializeNsd();
+        mNsd.setServiceResolverListener(this);
+        mNsd.discoverServices(CommonNSDServiceTypes.ESP_8266_SERVICE);
 
         mWifiHelper = WifiHelper.WifiHelperFactory.create(getApplicationContext(), new SimpleWifiConnectionListener() {
             @Override
@@ -59,11 +65,20 @@ public class MainActivity extends AppCompatActivity implements NsdManager.Discov
             @Override
             public void onConnected(NetworkInfo info) {
                 Log.i(TAG,"Connected.");
+                mNsd = new NetworkServiceDiscovery(getApplicationContext());
+                mNsd.initializeNsd();
+                mNsd.setServiceResolverListener(MainActivity.this);
+                mNsd.discoverServices(CommonNSDServiceTypes.ESP_8266_SERVICE);
             }
 
             @Override
             public void onDisconnected(NetworkInfo info) {
                 Log.i(TAG,"Disconnected");
+                if(mNsd!=null) {
+                    mNsd.stopServiceDiscovery();
+                }
+
+                //mNsd.
             }
 
             @Override
@@ -106,7 +121,10 @@ public class MainActivity extends AppCompatActivity implements NsdManager.Discov
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        mNsdManager.stopServiceDiscovery(this);
+        //mNsdManager.stopServiceDiscovery(this);
+        if(mNsd!=null) {
+            mNsd.stopServiceDiscovery();
+        }
 
 
         for(ESP8266NodeHandler esp : espInstances){
@@ -117,102 +135,62 @@ public class MainActivity extends AppCompatActivity implements NsdManager.Discov
 
 
     @Override
-    public void onStartDiscoveryFailed(String serviceType, int errorCode) {
+    public void onNewServiceResolved(NetworkServiceDiscovery.NSDService service) {
+        Log.i(TAG,"New service resolved!");
+        Log.i(TAG,"Raw  :  " + service.toString());
+        String espIP = service.getHost().toString().substring(1,service.getHost().toString().length());
+        int port = service.getPort();
 
-    }
+        Log.i(TAG,"IP&PORT  :  " + espIP + ":"+port);
+        if(!espServiceList.contains(espIP)) {
+            final ESP8266NodeHandler mEspHandler = new ESP8266NodeHandler(espIP, port, getApplicationContext());
+            espInstances.add(mEspHandler);
+            espServiceList.add(espIP);
+            Log.i(TAG,"Total founded esp8266 : " +espServiceList.size() );
+            new Handler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
 
-    @Override
-    public void onStopDiscoveryFailed(String serviceType, int errorCode) {
-
-    }
-
-    @Override
-    public void onDiscoveryStarted(String serviceType) {
-
-        Log.i(TAG,"Service discovery started...");
-    }
-
-    @Override
-    public void onDiscoveryStopped(String serviceType) {
-        Log.i(TAG,"Service discovery stopped...");
-    }
-
-    @Override
-    public void onServiceFound(NsdServiceInfo serviceInfo) {
-        Log.i(TAG,"New service found!");
-
-
-        mNsdManager.resolveService(serviceInfo, new NsdManager.ResolveListener() {
-            @Override
-            public void onResolveFailed(NsdServiceInfo serviceInfo, int errorCode) {
-                Log.i(TAG,"New service resolve failed!");
-            }
-
-            @Override
-            public void onServiceResolved(NsdServiceInfo serviceInfo) {
-
-                Log.i(TAG,"New service resolved!");
-                Log.i(TAG,"Raw  :  " + serviceInfo.toString());
-                String espIP = serviceInfo.getHost().toString().substring(1,serviceInfo.getHost().toString().length());
-                int port = serviceInfo.getPort();
-
-                Log.i(TAG,"IP&PORT  :  " + espIP + ":"+port);
-                if(!espServiceList.contains(espIP)) {
-                    final ESP8266NodeHandler mEspHandler = new ESP8266NodeHandler(espIP, port, getApplicationContext());
-                    espInstances.add(mEspHandler);
-                    espServiceList.add(espIP);
-                    Log.i(TAG,"Total founded esp8266 : " +espServiceList.size() );
+                    Log.i(TAG,"Instance Size : " + espInstances.size());
                     new Handler().postDelayed(new Runnable() {
                         @Override
                         public void run() {
-
-                                Log.i(TAG,"Instance Size : " + espInstances.size());
-                                new Handler().postDelayed(new Runnable() {
-                                    @Override
-                                    public void run() {
-                                        mEspHandler.start();
-                                        Log.i(TAG,"STARTING ESP " + mEspHandler.getIpAndPort());
-                                    }
-                                },(5000*espInstances.indexOf(mEspHandler)*2));
-
-
+                            mEspHandler.start();
+                            Log.i(TAG,"STARTING ESP " + mEspHandler.getIpAndPort());
                         }
-                    },1000);
-                }else{
-                    int loc = 0;
-
-                    for(ESP8266NodeHandler e : espInstances){
-                        if(e.getIpAndPort().equals(espIP+" : "+port)){
-                            loc = espInstances.indexOf(e);
-                            break;
-                        }
-                    }
-                    final ESP8266NodeHandler esp = espInstances.get(loc);
-
-                    new Handler().postDelayed(new Runnable() {
-                        @Override
-                        public void run() {
-
-                            Log.i(TAG,"Instance Size : " + espInstances.size());
-                            new Handler().postDelayed(new Runnable() {
-                                @Override
-                                public void run() {
-                                    esp.start();
-                                    Log.i(TAG,"STARTING ESP " + esp.getIpAndPort());
-                                }
-                            },(5000*espInstances.indexOf(esp)*2));
+                    },(5000*espInstances.indexOf(mEspHandler)*2));
 
 
-                        }
-                    },1000);
+                }
+            },1000);
+        }else{
+            int loc = 0;
+
+            for(ESP8266NodeHandler e : espInstances){
+                if(e.getIpAndPort().equals(espIP+" : "+port)){
+                    loc = espInstances.indexOf(e);
+                    break;
                 }
             }
-        });
+            final ESP8266NodeHandler esp = espInstances.get(loc);
+
+            new Handler().postDelayed(new Runnable() {
+                @Override
+                public void run() {
+
+                    Log.i(TAG,"Instance Size : " + espInstances.size());
+                    new Handler().postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                            esp.start();
+                            Log.i(TAG,"STARTING ESP " + esp.getIpAndPort());
+                        }
+                    },(5000*espInstances.indexOf(esp)*2));
+
+
+                }
+            },1000);
+        }
+
     }
-
-    @Override
-    public void onServiceLost(NsdServiceInfo serviceInfo) {
-
-    }
-
 }
